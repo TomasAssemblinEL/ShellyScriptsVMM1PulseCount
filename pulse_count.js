@@ -6,7 +6,8 @@
 var MQTT_BROKER = "192.168.1.82";
 var MQTT_PORT   = 1883;
 var MQTT_TOPIC  = "shelly/vmm1/pulsecount";
-var INPUT_ID    = 0;          // Shelly input index to monitor
+var DEVICE_ID   = "FCB467A6AF80";
+var INPUT_ID    = 2;          // Shelly input index to monitor
 var PUBLISH_INTERVAL_MS = 5000; // Publish every 5 seconds
 
 // ---- State ----
@@ -23,7 +24,7 @@ Shelly.addEventHandler(function (event) {
 // ---- Periodic MQTT publish ----
 Timer.set(PUBLISH_INTERVAL_MS, true, function () {
   var payload = JSON.stringify({
-    device: "VMM1",
+    device: DEVICE_ID,
     input: INPUT_ID,
     pulse_count: pulseCount,
     ts: Math.floor(Date.now() / 1000)
@@ -41,4 +42,4 @@ MQTT.setDisconnectHandler(function () {
   print("MQTT disconnected");
 });
 
-print("VMM1 PulseCount script started.");
+print("Shelly Plus Uni pulse counter started for " + DEVICE_ID + " on input " + INPUT_ID + ".");
