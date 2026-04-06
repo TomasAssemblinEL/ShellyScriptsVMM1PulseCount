@@ -16,17 +16,18 @@ Counts input toggles and publishes the running total via MQTT.
 | `MQTT_BROKER` | `192.168.1.82` | MQTT broker IP |
 | `MQTT_PORT` | `1883` | MQTT broker port |
 | `MQTT_TOPIC` | `shelly/vmm1/pulsecount` | Publish topic |
-| `INPUT_ID` | `0` | Shelly input to monitor |
+| `DEVICE_ID` | `FCB467A6AF80` | Shelly device ID |
+| `INPUT_ID` | `2` | Shelly input to monitor |
 | `PUBLISH_INTERVAL_MS` | `5000` | Publish interval (ms) |
 
 ## MQTT Payload Example
 
 ```json
 {
-  "device": "VMM1",
-  "input": 0,
+  "device": "FCB467A6AF80",
+  "input": 2,
   "pulse_count": 142,
-  "ts": 1744052400
+  "ts": 1775491200
 }
 ```
 

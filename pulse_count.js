@@ -13,6 +13,36 @@ var PUBLISH_INTERVAL_MS = 5000; // Publish every 5 seconds
 // ---- State ----
 var pulseCount = 0;
 
+function getStatusSafe(component) {
+  try {
+    return Shelly.getComponentStatus(component);
+  } catch (e) {
+    return null;
+  }
+}
+
+function getBatteryPercent() {
+  var battery = getStatusSafe("battery");
+  if (!battery) return null;
+  if (typeof battery.percent === "number") return battery.percent;
+  if (typeof battery.value === "number") return battery.value;
+  return null;
+}
+
+function getWifiRssi() {
+  var wifi = getStatusSafe("wifi");
+  if (!wifi) return null;
+  if (typeof wifi.rssi === "number") return wifi.rssi;
+  return null;
+}
+
+function getUptimeSeconds() {
+  var sys = getStatusSafe("sys");
+  if (!sys) return null;
+  if (typeof sys.uptime === "number") return sys.uptime;
+  return null;
+}
+
 // ---- Count pulses on input event ----
 Shelly.addEventHandler(function (event) {
   if (event.component === "input:" + INPUT_ID && event.info.event === "toggle") {
@@ -27,6 +57,9 @@ Timer.set(PUBLISH_INTERVAL_MS, true, function () {
     device: DEVICE_ID,
     input: INPUT_ID,
     pulse_count: pulseCount,
+    battery: getBatteryPercent(),
+    rssi: getWifiRssi(),
+    uptime: getUptimeSeconds(),
     ts: Math.floor(Date.now() / 1000)
   });
   MQTT.publish(MQTT_TOPIC, payload, 0, false);
@@ -42,4 +75,5 @@ MQTT.setDisconnectHandler(function () {
   print("MQTT disconnected");
 });
 
-print("Shelly Plus Uni pulse counter started for " + DEVICE_ID + " on input " + INPUT_ID + ".");
+var startupMessage = "Shelly Plus Uni pulse counter started for " + DEVICE_ID + ", input " + INPUT_ID + ".";
+print(startupMessage);
