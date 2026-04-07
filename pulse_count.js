@@ -9,9 +9,10 @@ var MQTT_TOPIC  = "shelly/vmm1/pulsecount";
 var DEVICE_ID   = "FCB467A6AF80";
 var INPUT_ID    = 2;          // Shelly input index to monitor
 var PUBLISH_INTERVAL_MS = 5000; // Publish every 5 seconds
-var UNIT_PER_PULSE = 1.0;     // Measured unit per pulse (example: liters or Wh)
+var UNIT_PER_PULSE = 0.0025;     // Measured unit per pulse (example: liters or Wh)
 var MEASURE_UNIT = "liters"; // Example: "liters" or "Wh"
 var FLOW_TIMEOUT_MS = 30000;  // If no pulse for this long, report flow as 0
+var STATUS_PUBLISH_DEBOUNCE_MS = 750; // Limit burst publishes from status updates
 
 // ---- State ----
 var pulseCount = 0;
@@ -19,6 +20,7 @@ var previousPulseMs = 0;
 var lastPulseMs = 0;
 var lastPublishMs = Date.now();
 var lastPublishPulseCount = 0;
+var lastStatusPublishMs = 0;
 
 function getStatusSafe(component) {
   try {
@@ -28,13 +30,6 @@ function getStatusSafe(component) {
   }
 }
 
-function getBatteryPercent() {
-  var battery = getStatusSafe("battery");
-  if (!battery) return null;
-  if (typeof battery.percent === "number") return battery.percent;
-  if (typeof battery.value === "number") return battery.value;
-  return null;
-}
 
 function getWifiRssi() {
   var wifi = getStatusSafe("wifi");
@@ -48,6 +43,19 @@ function getUptimeSeconds() {
   if (!sys) return null;
   if (typeof sys.uptime === "number") return sys.uptime;
   return null;
+}
+
+function isMqttConnected() {
+  if (typeof MQTT.isConnected === "function") {
+    return MQTT.isConnected();
+  }
+
+  var mqtt = getStatusSafe("mqtt");
+  if (mqtt && typeof mqtt.connected === "boolean") {
+    return mqtt.connected;
+  }
+
+  return true;
 }
 
 function round3(value) {
@@ -76,21 +84,28 @@ function getAverageFlowPerHour(nowMs) {
 }
 
 function publishPulseCount(source) {
+  if (!isMqttConnected()) {
+    print("MQTT offline, skipped publish source:" + source);
+    return;
+  }
+
   var nowMs = Date.now();
   var pulseFrequencyHz = getPulseFrequencyHz(nowMs);
   var instantFlowPerHour = pulseFrequencyHz * UNIT_PER_PULSE * 3600;
   var averageFlowPerHour = getAverageFlowPerHour(nowMs);
+  var xTotal = round3(pulseCount * UNIT_PER_PULSE);
 
   var payload = JSON.stringify({
+    id: INPUT_ID,
+    counts: {
+      total: pulseCount,
+      xtotal: xTotal
+    },
     device: DEVICE_ID,
-    input: INPUT_ID,
-    pulse_count: pulseCount,
-    total_quantity: round3(pulseCount * UNIT_PER_PULSE),
     quantity_unit: MEASURE_UNIT,
     pulse_frequency_hz: round3(pulseFrequencyHz),
     flow_rate_per_hour: round3(instantFlowPerHour),
     avg_flow_rate_per_hour: round3(averageFlowPerHour),
-    battery: getBatteryPercent(),
     rssi: getWifiRssi(),
     uptime: getUptimeSeconds(),
     source: source,
@@ -101,17 +116,35 @@ function publishPulseCount(source) {
   lastPublishPulseCount = pulseCount;
 
   MQTT.publish(MQTT_TOPIC, payload, 0, false);
-  print("Published: " + payload);
+  print(payload);
 }
 
-// ---- Count pulses on input event ----
-Shelly.addEventHandler(function (event) {
-  if (event.component === "input:" + INPUT_ID && event.info.event === "toggle") {
-    pulseCount++;
-    previousPulseMs = lastPulseMs;
-    lastPulseMs = Date.now();
-    print("Pulse detected. Total: " + pulseCount);
-    publishPulseCount("pulse");
+// ---- Track pulse counts from input status updates ----
+Shelly.addStatusHandler(function (status) {
+  if (status.component !== "input:" + INPUT_ID) return;
+
+  if (status.delta && status.delta.counts && typeof status.delta.counts.total === "number") {
+    var newTotal = status.delta.counts.total;
+
+    if (newTotal !== pulseCount) {
+      previousPulseMs = lastPulseMs;
+      lastPulseMs = Date.now();
+    }
+
+    pulseCount = newTotal;
+    print("id:" + INPUT_ID + " counts.total:" + pulseCount);
+
+    var nowMs = Date.now();
+    if (nowMs - lastStatusPublishMs >= STATUS_PUBLISH_DEBOUNCE_MS) {
+      lastStatusPublishMs = nowMs;
+      publishPulseCount("status_total");
+    }
+
+    return;
+  }
+
+  if (status.delta && status.delta.counts && typeof status.delta.counts.xtotal === "number") {
+    print("id:" + INPUT_ID + " counts.xtotal:" + status.delta.counts.xtotal);
   }
 });
 
@@ -131,3 +164,11 @@ MQTT.setDisconnectHandler(function () {
 
 var startupMessage = "Shelly Plus Uni pulse counter started for " + DEVICE_ID + ", input " + INPUT_ID + ".";
 print(startupMessage);
+
+var inputStatus = getStatusSafe("input:" + INPUT_ID);
+if (inputStatus && inputStatus.counts && typeof inputStatus.counts.total === "number") {
+  pulseCount = inputStatus.counts.total;
+  lastPublishPulseCount = pulseCount;
+  print("Initial counts.total synced: " + pulseCount);
+}
+
