@@ -31,6 +31,24 @@ function savePersistentState() {
   });
 }
 
+function setPersistentStateForTest(lastX, startToday, startYesterday, startDayBefore, snapDay) {
+  lastXTotal = lastX;
+  startTodayXTotal = startToday;
+  startYesterdayXTotal = startYesterday;
+  startDayBeforeXTotal = startDayBefore;
+  lastSnapDay = snapDay;
+
+  print(
+    "setPersistentStateForTest lastXTotal:" + lastXTotal +
+    " startTodayXTotal:" + startTodayXTotal +
+    " startYesterdayXTotal:" + startYesterdayXTotal +
+    " startDayBeforeXTotal:" + startDayBeforeXTotal +
+    " lastSnapDay:" + lastSnapDay
+  );
+
+  savePersistentState();
+}
+
 function loadPersistentState() {
   Shelly.call("KVS.Get", {
     key: STATE_KVS_KEY
@@ -48,6 +66,16 @@ function loadPersistentState() {
       startDayBeforeXTotal = state.startDayBeforeXTotal;
       lastSnapDay = typeof state.lastSnapDay === "number" ? state.lastSnapDay : -1;
       print("Loaded saved state from KVS");
+      print(
+        "loadPersistentState lastXTotal:" + lastXTotal +
+        " startTodayXTotal:" + startTodayXTotal +
+        " startYesterdayXTotal:" + startYesterdayXTotal +
+        " startDayBeforeXTotal:" + startDayBeforeXTotal +
+        " lastSnapDay:" + lastSnapDay
+      );
+
+      // Re-evaluate direction on restart using restored values.
+      compareYesterdayAndDayBefore();
     } catch (e) {
       print("Failed to parse saved state");
     }
@@ -83,6 +111,20 @@ function calculateDeltaPreviousDayToday(todayXTotal, previousDayXTotal) {
   return todayXTotal - previousDayXTotal;
 }
 
+function setSwitchState(switchId, onState) {
+  Shelly.call("Switch.Set", {
+    id: switchId,
+    on: onState
+  }, function (result, errorCode, errorMessage) {
+    if (errorCode !== 0) {
+      print("Switch.Set failed id:" + switchId + " error:" + errorMessage);
+      return;
+    }
+
+    print("Switch id:" + switchId + " set to " + (onState ? "on" : "off"));
+  });
+}
+
 function compareYesterdayAndDayBefore() {
   if (startTodayXTotal === null || startYesterdayXTotal === null || startDayBeforeXTotal === null) {
     return;
@@ -94,6 +136,24 @@ function compareYesterdayAndDayBefore() {
 
   if (yesterday > dayBefore) direction = "more";
   if (yesterday < dayBefore) direction = "less";
+
+  if (direction === "more") {
+    // More usage: blue LED (switch 0) on, red LED (switch 1) off
+    setSwitchState(0, true);
+    setSwitchState(1, false);
+  }
+
+  if (direction === "less") {
+    // Less usage: blue LED (switch 0) off, red LED (switch 1) on
+    setSwitchState(0, false);
+    setSwitchState(1, true);
+  }
+
+  if (direction === "same") {
+    // Same usage: both blue and red LEDs on
+    setSwitchState(0, true);
+    setSwitchState(1, true);
+  }
 
   var msg = "Compare yesterday vs day-before: " + direction +
     " (yesterday:" + round1(yesterday) + " day_before:" + round1(dayBefore) + ")";
@@ -183,3 +243,6 @@ MQTT.setDisconnectHandler(function () {
 
 loadPersistentState();
 print("Listening for status changes on input:" + INPUT_ID);
+
+// Example manual test in Shelly console:
+// setPersistentStateForTest(7.1, 7.0, 5.2, 3.8, 20557);
