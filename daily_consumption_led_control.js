@@ -133,9 +133,11 @@ function compareYesterdayAndDayBefore() {
   var yesterday = startTodayXTotal - startYesterdayXTotal;
   var dayBefore = startYesterdayXTotal - startDayBeforeXTotal;
   var direction = "same";
+  // Threshold: 5% of day-before consumption, capped at minimum 0.1 to avoid zero threshold
+  var threshold = dayBefore > 0 ? dayBefore * 0.05 : 0.1;
 
-  if (yesterday > dayBefore) direction = "more";
-  if (yesterday < dayBefore) direction = "less";
+  if (yesterday > dayBefore + threshold) direction = "more";
+  if (yesterday < dayBefore - threshold) direction = "less";
 
   if (direction === "more") {
     // More usage: blue LED (switch 0) on, red LED (switch 1) off
@@ -197,7 +199,8 @@ Timer.set(60000, true, function () {
   var today    = Math.floor(unixSecs / 86400);
 
   // Snapshot once at 00:00 on each new day
-  if (hour === 0 && minute === 0 && today !== lastSnapDay) {
+  // Guard: skip if NTP not synced (unixSecs=0) or lastXTotal not yet received
+  if (unixSecs > 0 && lastXTotal !== null && hour === 0 && minute === 0 && today !== lastSnapDay) {
     startDayBeforeXTotal = startYesterdayXTotal;
     startYesterdayXTotal = startTodayXTotal;
     startTodayXTotal = lastXTotal;

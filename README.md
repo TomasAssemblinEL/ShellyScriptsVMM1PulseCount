@@ -67,10 +67,11 @@ Shelly scripts for pulse counting, daily consumption comparison, and LED output 
 3. At `00:00`, rotates day-start snapshots and compares:
   1. yesterday usage
   2. day-before-yesterday usage
+  3. snapshot runs only when time is synced and `lastXTotal` is available
 4. Controls LEDs via switches based on direction:
   1. `more` -> switch `0` ON (blue), switch `1` OFF (red)
   2. `less` -> switch `0` OFF (blue), switch `1` ON (red)
-  3. `same` -> switch `0` ON, switch `1` ON
+  3. `same` -> switch `0` ON, switch `1` ON (when yesterday is within ±5% of day-before)
 5. Re-runs comparison immediately after restart when state is loaded.
 
 ### Daily Comparison Message Example
@@ -86,6 +87,9 @@ Compare yesterday vs day-before: less (yesterday:2.1 day_before:3.4)
 3. Status-triggered publishes are debounced to reduce burst traffic.
 4. A periodic publish still runs every `PUBLISH_INTERVAL_MS`.
 5. Daily comparison data is persisted in KVS for restart safety.
+6. Midnight snapshot is guarded to avoid false snapshots before NTP time sync.
+7. Midnight snapshot is skipped if `lastXTotal` has not been received yet.
+8. Daily comparison tolerance is based on day-before usage (`5%`) with a minimum threshold of `0.1`.
 
 ## Setup
 
