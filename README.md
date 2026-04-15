@@ -1,30 +1,42 @@
 # ShellyScriptsVMM1PulseCount
 
-Shelly scripts for pulse counting, daily consumption comparison, and LED output control.
+Shelly Plus Uni scripts for pulse-event acquisition, MQTT telemetry publication, and day-over-day consumption classification via dual LED outputs.
 
-## Files
+## Full README
+
+### Overview
+
+This repository contains two Shelly Script runtime modules:
+
+- `pulse_count.js`: Subscribes to input status updates, derives pulse and flow metrics, and publishes normalized payloads to MQTT.
+- `daily_consumption_led_control.js`: Maintains rolling daily baselines in KVS, computes relative daily deltas, and drives two switch outputs as a visual comparator.
+
+Shelly Plus Uni user guide:
+https://www.shelly.com/blogs/documentation/shelly-plus-uni?srsltid=AfmBOooTllJw3eJ0L_DH3xdOvt1dClnTWgpJnGhwQNg1mkwBrpo79mk6
+
+### Files
 
 | File | Description |
 |------|-------------|
 | `pulse_count.js` | Pulse counter and flow metrics publisher |
 | `daily_consumption_led_control.js` | Daily comparison script with persistence and LED switch control |
 
-## Configuration (`pulse_count.js`)
+### Configuration: `pulse_count.js`
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MQTT_BROKER` | `192.168.1.82` | MQTT broker IP |
 | `MQTT_PORT` | `1883` | MQTT broker port |
 | `MQTT_TOPIC` | `shelly/vmm1/pulsecount` | Publish topic |
-| `DEVICE_ID` | `FCB467A6AF80` | Shelly device ID |
+| `DEVICE_ID` | `FCB467A6AF80` | Device identifier inserted into telemetry payloads |
 | `INPUT_ID` | `2` | Shelly input to monitor |
 | `PUBLISH_INTERVAL_MS` | `5000` | Publish interval (ms) |
-| `UNIT_PER_PULSE` | `0.0025` | Quantity per pulse (example liters or Wh) |
-| `MEASURE_UNIT` | `liters` | Quantity unit label |
-| `FLOW_TIMEOUT_MS` | `30000` | If no pulse within this window, flow reports `0` |
+| `UNIT_PER_PULSE` | `0.0025` | Conversion factor from pulses to domain quantity (for example liters or Wh) |
+| `MEASURE_UNIT` | `liters` | Quantity unit metadata attached to payloads |
+| `FLOW_TIMEOUT_MS` | `30000` | If no pulse arrives within this window, flow reports `0` |
 | `STATUS_PUBLISH_DEBOUNCE_MS` | `750` | Minimum ms between status-triggered publishes |
 
-## Configuration (`daily_consumption_led_control.js`)
+### Configuration: `daily_consumption_led_control.js`
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -32,9 +44,9 @@ Shelly scripts for pulse counting, daily consumption comparison, and LED output 
 | `MQTT_BROKER` | `192.168.1.82` | MQTT broker IP |
 | `MQTT_PORT` | `1883` | MQTT broker port |
 | `MQTT_TOPIC` | `shelly/vmm1/daily_consumption` | Topic for daily consumption/comparison messages |
-| `STATE_KVS_KEY` | `daily_consumption_state_input_2` | Persistent KVS key used across restarts |
+| `STATE_KVS_KEY` | `daily_consumption_state_input_2` | Persistent KVS namespace for restart-safe state recovery |
 
-## MQTT Payload Example
+### MQTT Payload Example
 
 ```json
 {
@@ -55,46 +67,50 @@ Shelly scripts for pulse counting, daily consumption comparison, and LED output 
 }
 ```
 
-## Daily Comparison Behavior (`daily_consumption_led_control.js`)
+### Daily Comparison Behavior
 
-1. Reads `counts.total` and `counts.xtotal` from `Shelly.addStatusHandler(...)` on `input:2`.
-2. Saves state to KVS so values survive restart:
-  1. `lastXTotal`
-  2. `startTodayXTotal`
-  3. `startYesterdayXTotal`
-  4. `startDayBeforeXTotal`
-  5. `lastSnapDay`
-3. At `00:00`, rotates day-start snapshots and compares:
-  1. yesterday usage
-  2. day-before-yesterday usage
-  3. snapshot runs only when time is synced and `lastXTotal` is available
-4. Controls LEDs via switches based on direction:
-  1. `more` -> switch `0` ON (blue), switch `1` OFF (red)
-  2. `less` -> switch `0` OFF (blue), switch `1` ON (red)
-  3. `same` -> switch `0` ON, switch `1` ON (when yesterday is within ±5% of day-before)
-5. Re-runs comparison immediately after restart when state is loaded.
+1. Consumes `counts.total` and `counts.xtotal` from `Shelly.addStatusHandler(...)` events on `input:2`.
+2. Persists comparison state in KVS to guarantee restart continuity:
+   - `lastXTotal`
+   - `startTodayXTotal`
+   - `startYesterdayXTotal`
+   - `startDayBeforeXTotal`
+   - `lastSnapDay`
+3. At `00:00` local time, rotates day-start baselines and computes yesterday usage against day-before usage.
+4. Executes midnight snapshot logic only when NTP time is valid and `lastXTotal` has been initialized.
+5. Applies comparator output mapping to switch channels:
+   - `more`: switch `0` ON (blue), switch `1` OFF (red)
+   - `less`: switch `0` OFF (blue), switch `1` ON (red)
+   - `same`: switch `0` ON and switch `1` ON (when yesterday is within ±5% of day-before)
+6. Re-evaluates comparison immediately after reboot after KVS state hydration.
 
-### Daily Comparison Message Example
+Daily comparison message example:
 
 ```text
 Compare yesterday vs day-before: less (yesterday:2.1 day_before:3.4)
 ```
 
-## Notes
+### Notes
 
-1. Pulse counts are read from `Shelly.addStatusHandler(...)` on `input:2`.
-2. The script skips publish when MQTT is offline.
-3. Status-triggered publishes are debounced to reduce burst traffic.
-4. A periodic publish still runs every `PUBLISH_INTERVAL_MS`.
-5. Daily comparison data is persisted in KVS for restart safety.
-6. Midnight snapshot is guarded to avoid false snapshots before NTP time sync.
-7. Midnight snapshot is skipped if `lastXTotal` has not been received yet.
-8. Daily comparison tolerance is based on day-before usage (`5%`) with a minimum threshold of `0.1`.
+1. Input counters are sampled from `Shelly.addStatusHandler(...)` events on `input:2`.
+2. MQTT publication is gated when broker connectivity is unavailable.
+3. Event-driven publications are debounced to bound burst throughput.
+4. A periodic publication loop runs independently at `PUBLISH_INTERVAL_MS`.
+5. Daily comparator state is persisted in KVS for crash/reboot resilience.
+6. Midnight baseline rotation is protected against unsynchronized system time.
+7. Snapshot rotation is deferred until `lastXTotal` is observed at least once.
+8. `same` classification uses a relative tolerance of `5%` with an absolute floor of `0.1`.
 
-## Setup
+### Setup
 
-1. Open the Shelly web UI → Scripts → Add script.  
-2. Add `pulse_count.js` if you want pulse and flow metrics publishing.  
-3. Add `daily_consumption_led_control.js` for daily comparison + LED control.  
-4. Save and enable the scripts.  
-5. Ensure MQTT is enabled in Shelly Settings → MQTT with broker `192.168.1.82:1883`.
+1. Open the Shelly Web UI and navigate to Scripts > Add script.
+2. Deploy `pulse_count.js` to enable pulse and flow telemetry publication.
+3. Deploy `daily_consumption_led_control.js` to enable day-over-day comparison and LED output signaling.
+4. Save and enable both scripts.
+5. Enable MQTT in Shelly Settings > MQTT and configure broker endpoint `192.168.1.82:1883`.
+
+### Change Log
+
+- 2026-04-15: Added complete README structure (Overview, configuration, runtime behavior, notes, setup).
+- 2026-04-15: Reworked wording into a more technical, implementation-oriented style.
+- 2026-04-15: Added concise project summary at the top for quick context.
