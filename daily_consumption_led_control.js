@@ -11,6 +11,7 @@ var startTodayXTotal = null;       // xtotal at today's 00:00
 var startYesterdayXTotal = null;   // xtotal at yesterday's 00:00
 var startDayBeforeXTotal = null;   // xtotal at day-before-yesterday 00:00
 var lastSnapDay = -1;              // calendar day when snapshot was taken
+var lastPublishHour = -1;          // hour index when delta was last published
 
 function savePersistentState() {
   var state = JSON.stringify({
@@ -186,7 +187,7 @@ function getSysTime() {
   return null;
 }
 
-// Check every minute; snapshot xtotal at 00:00 and run daily comparisons
+// Check every minute; snapshot xtotal at 00:00 and publish delta once per hour
 Timer.set(60000, true, function () {
   var t = getSysTime();
   if (!t) return;
@@ -210,10 +211,12 @@ Timer.set(60000, true, function () {
     compareYesterdayAndDayBefore();
   }
 
-  // Print daily consumption every minute if we have both values
-  if (startTodayXTotal !== null && lastXTotal !== null) {
+  // Publish daily consumption once per hour if we have both values
+  var hourIndex = unixSecs > 0 ? Math.floor(unixSecs / 3600) : -1;
+  if (startTodayXTotal !== null && lastXTotal !== null && minute === 0 && hourIndex > 0 && hourIndex !== lastPublishHour) {
     var delta = calculateDeltaPreviousDayToday(lastXTotal, startTodayXTotal);
     publishDailyConsumption(delta, lastXTotal, startTodayXTotal);
+    lastPublishHour = hourIndex;
   }
 });
 
@@ -228,11 +231,6 @@ Shelly.addStatusHandler(function (status) {
     lastXTotal = status.delta.counts.xtotal;
     savePersistentState();
     print("id:" + INPUT_ID + " counts.xtotal:" + lastXTotal);
-
-    if (startTodayXTotal !== null) {
-      var delta = calculateDeltaPreviousDayToday(lastXTotal, startTodayXTotal);
-      publishDailyConsumption(delta, lastXTotal, startTodayXTotal);
-    }
   }
 });
 
