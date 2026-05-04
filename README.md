@@ -6,10 +6,11 @@ Shelly Plus Uni scripts for pulse-event acquisition, MQTT telemetry publication,
 
 ### Overview
 
-This repository contains two Shelly Script runtime modules:
+This repository contains three Shelly Script runtime modules:
 
 - `pulse_count.js`: Subscribes to input status updates, derives pulse and flow metrics, and publishes normalized payloads to MQTT.
 - `daily_consumption_led_control.js`: Maintains rolling daily baselines in KVS, computes relative daily deltas, and drives two switch outputs as a visual comparator.
+- `MixTankFertilizerController.js`: Controls mix-tank refill and fertilizer dosing with a state-based automation cycle.
 
 Shelly Plus Uni user guide:
 https://www.shelly.com/blogs/documentation/shelly-plus-uni?srsltid=AfmBOooTllJw3eJ0L_DH3xdOvt1dClnTWgpJnGhwQNg1mkwBrpo79mk6
@@ -20,6 +21,7 @@ https://www.shelly.com/blogs/documentation/shelly-plus-uni?srsltid=AfmBOooTllJw3
 |------|-------------|
 | `pulse_count.js` | Pulse counter and flow metrics publisher |
 | `daily_consumption_led_control.js` | Daily comparison script with persistence and LED switch control |
+| `MixTankFertilizerController.js` | Mix-tank refill and fertilizer dosing controller with timed dosing reset |
 
 ### Configuration: `pulse_count.js`
 
@@ -106,11 +108,13 @@ Compare yesterday vs day-before: less (yesterday:2.1 day_before:3.4)
 1. Open the Shelly Web UI and navigate to Scripts > Add script.
 2. Deploy `pulse_count.js` to enable pulse and flow telemetry publication.
 3. Deploy `daily_consumption_led_control.js` to enable day-over-day comparison and LED output signaling.
-4. Save and enable both scripts.
-5. Enable MQTT in Shelly Settings > MQTT and configure broker endpoint `192.168.1.82:1883`.
+4. Deploy `MixTankFertilizerController.js` to automate mix-tank water fill and fertilizer dosing.
+5. Save and enable the scripts you use on your device.
+6. Enable MQTT in Shelly Settings > MQTT and configure broker endpoint `192.168.1.82:1883`.
 
 ### Change Log
 
 - 2026-04-15: Added complete README structure (Overview, configuration, runtime behavior, notes, setup).
 - 2026-04-15: Reworked wording into a more technical, implementation-oriented style.
 - 2026-04-15: Added concise project summary at the top for quick context.
+- 2026-05-04: Added `MixTankFertilizerController.js` to project overview, file list, and setup section.
