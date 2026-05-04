@@ -10,7 +10,7 @@ This repository contains three Shelly Script runtime modules:
 
 - `pulse_count.js`: Subscribes to input status updates, derives pulse and flow metrics, and publishes normalized payloads to MQTT.
 - `daily_consumption_led_control.js`: Maintains rolling daily baselines in KVS, computes relative daily deltas, and drives two switch outputs as a visual comparator.
-- `MixTankFertilizerController.js`: Controls mix-tank refill and fertilizer dosing with a state-based automation cycle.
+- `MixTankFertilizerController.js`: Controls mix-tank refill and fertilizer dosing with a state-based automation cycle and reboot-safe KVS recovery.
 
 Shelly Plus Uni user guide:
 https://www.shelly.com/blogs/documentation/shelly-plus-uni?srsltid=AfmBOooTllJw3eJ0L_DH3xdOvt1dClnTWgpJnGhwQNg1mkwBrpo79mk6
@@ -21,7 +21,7 @@ https://www.shelly.com/blogs/documentation/shelly-plus-uni?srsltid=AfmBOooTllJw3
 |------|-------------|
 | `pulse_count.js` | Pulse counter and flow metrics publisher |
 | `daily_consumption_led_control.js` | Daily comparison script with persistence and LED switch control |
-| `MixTankFertilizerController.js` | Mix-tank refill and fertilizer dosing controller with timed dosing reset |
+| `MixTankFertilizerController.js` | Mix-tank refill and fertilizer dosing controller with timed dosing reset and KVS-backed restart recovery |
 
 ### Configuration: `pulse_count.js`
 
@@ -112,9 +112,18 @@ Compare yesterday vs day-before: less (yesterday:2.1 day_before:3.4)
 5. Save and enable the scripts you use on your device.
 6. Enable MQTT in Shelly Settings > MQTT and configure broker endpoint `192.168.1.82:1883`.
 
+### MixTank Controller Persistence
+
+1. `MixTankFertilizerController.js` stores runtime state in KVS key `mix_tank_fertilizer_controller_state`.
+2. On reboot, it restores one of three states: idle, filling water, or dosing fertilizer.
+3. If dosing was active, it resumes only for the remaining dosing time when system unix time is valid.
+4. If recovery time data is missing or invalid, it performs a safe reset (pump off and state idle).
+5. Water filling is allowed only between `00:00` (inclusive) and `03:00` (exclusive), and is automatically stopped outside this window.
+
 ### Change Log
 
 - 2026-04-15: Added complete README structure (Overview, configuration, runtime behavior, notes, setup).
 - 2026-04-15: Reworked wording into a more technical, implementation-oriented style.
 - 2026-04-15: Added concise project summary at the top for quick context.
 - 2026-05-04: Added `MixTankFertilizerController.js` to project overview, file list, and setup section.
+- 2026-05-04: Added reboot-safe KVS persistence and startup recovery documentation for `MixTankFertilizerController.js`.
