@@ -40,20 +40,40 @@ function logTransition(trigger, nextState, reason) {
   print("[MixTank]", trigger, "state", stateName(state), "->", stateName(nextState), "|", reason);
 }
 
-function callRpc(method, params, context, onSuccess, onError) {
-  Shelly.call(method, params, function (result, errorCode, errorMessage) {
-    if (errorCode !== 0) {
-      print("[MixTank][RPC ERROR]", context, "method=", method, "code=", errorCode, "message=", errorMessage);
-      if (onError) {
-        onError(errorCode, errorMessage);
+function callRpc(method, params, context, onSuccess, onError, attempt) {
+  if (typeof attempt !== "number") {
+    attempt = 0;
+  }
+
+  try {
+    Shelly.call(method, params, function (result, errorCode, errorMessage) {
+      if (errorCode !== 0) {
+        print("[MixTank][RPC ERROR]", context, "method=", method, "code=", errorCode, "message=", errorMessage);
+        if (onError) {
+          onError(errorCode, errorMessage);
+        }
+        return;
       }
+
+      if (onSuccess) {
+        onSuccess(result);
+      }
+    });
+  } catch (e) {
+    // Shelly can throw during call bursts on startup; retry shortly.
+    if (attempt < 8) {
+      print("[MixTank][RPC RETRY]", context, "method=", method, "attempt=", attempt + 1);
+      Timer.set(200, false, function () {
+        callRpc(method, params, context, onSuccess, onError, attempt + 1);
+      });
       return;
     }
 
-    if (onSuccess) {
-      onSuccess(result);
+    print("[MixTank][RPC THROW]", context, "method=", method, "message=", e);
+    if (onError) {
+      onError(-1, "RPC exception: " + e);
     }
-  });
+  }
 }
 
 function setSwitch(switchId, on, context, onSuccess) {
@@ -309,6 +329,36 @@ function enforceWaterFillWindow() {
   transitionTo(STATE_IDLE, "fill_window_closed", "Outside allowed fill window 00:00-03:00");
 }
 
+function getInputState(inputId) {
+  try {
+    var input = Shelly.getComponentStatus("input:" + inputId);
+    if (input && typeof input.state === "boolean") {
+      return input.state;
+    }
+  } catch (e) {}
+
+  return null;
+}
+
+function bootstrapFromCurrentInputs() {
+  var lowLevelState = getInputState(LOW_LEVEL_INPUT_ID);
+  var highLevelState = getInputState(HIGH_LEVEL_INPUT_ID);
+
+  print("[MixTank] Bootstrap input states low=", lowLevelState, "high=", highLevelState, "state=", stateName(state));
+
+  if (state === STATE_IDLE && lowLevelState === true) {
+    // Script restarts can miss edge events; bootstrap from current level states.
+    print("[MixTank] Startup bootstrap: low level active, starting water fill");
+    notify("Startup bootstrap startar vattenpåfyllning");
+    startWaterFillCycle();
+    return;
+  }
+
+  if (state === STATE_FILLING_WATER && highLevelState === true) {
+    startDosingCycle();
+  }
+}
+
 Shelly.addStatusHandler(function (e) {
   if (!startupRestored) {
     return;
@@ -346,6 +396,9 @@ restoreStateFromKvs(function () {
   applyRecoveredState();
   startupRestored = true;
   print("[MixTank] Startup recovery complete, event handling enabled");
+  Timer.set(500, false, function () {
+    bootstrapFromCurrentInputs();
+  });
 });
 
 Timer.set(WINDOW_ENFORCE_INTERVAL_MS, true, function () {
