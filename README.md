@@ -62,6 +62,8 @@ https://www.shelly.com/blogs/documentation/shelly-plus-uni?srsltid=AfmBOooTllJw3
 | `WINDOW_ENFORCE_INTERVAL_MS` | `60000` | Polling interval used to force-stop filling if the time window closes mid-cycle. |
 | `NTFY_URL` | `https://ntfy.sh/berg_rud_vaxthus` | Notification endpoint used for operational events. |
 | `STATE_KVS_KEY` | `mix_tank_fertilizer_controller_state` | Persistent state key for reboot-safe recovery. |
+| `ACTIVE_STATE_VC_KEY` | `text:200` | Virtual text component key that exposes current controller state for integrations such as Home Assistant. |
+| `ACTIVE_STATE_VC_ID` | `200` | Virtual text component numeric identifier used when auto-creating the active-state component. |
 
 ### MQTT Payload Example
 
@@ -286,6 +288,29 @@ The controller is conservative by design:
 
 These decisions bias the system toward stopping automation rather than continuing with uncertain process state.
 
+#### Home Assistant virtual-state entity
+
+The controller exposes one virtual text component with the active process state so Home Assistant can consume it as a single status signal.
+
+Implementation details:
+
+1. The script uses virtual component `text:200` (`ACTIVE_STATE_VC_KEY`).
+2. If the component is missing, the script creates it automatically with `Virtual.Add` and name `MixTank Active State`.
+3. On startup recovery completion and on every state transition, the script writes the state string to the virtual component.
+
+Published values:
+
+1. `IDLE`
+2. `FILLING_WATER`
+3. `DOSING_FERTILIZER`
+
+Home Assistant usage notes:
+
+1. Add the Shelly device through the Shelly integration as usual.
+2. Locate the virtual text entity corresponding to component key `text:200`.
+3. Use that entity value in automations, template sensors, or dashboard badges for process-state visibility.
+4. If you changed `ACTIVE_STATE_VC_ID`, update Home Assistant references to the new virtual component key.
+
 ### Change Log
 
 - 2026-04-15: Added complete README structure (Overview, configuration, runtime behavior, notes, setup).
@@ -294,3 +319,4 @@ These decisions bias the system toward stopping automation rather than continuin
 - 2026-05-04: Added `MixTankFertilizerController.js` to project overview, file list, and setup section.
 - 2026-05-04: Added reboot-safe KVS persistence and startup recovery documentation for `MixTankFertilizerController.js`.
 - 2026-05-10: Expanded README with detailed technical documentation for `MixTankFertilizerController.js`, including state machine, startup bootstrap, and RPC overload retry behavior.
+- 2026-05-10: Documented Home Assistant virtual-state exposure via virtual component `text:200` and added MixTank VC configuration details.

@@ -19,6 +19,8 @@ var WATER_FILL_WINDOW_END_HOUR = 3;
 var WINDOW_ENFORCE_INTERVAL_MS = 60000;
 var NTFY_URL = "https://ntfy.sh/berg_rud_vaxthus";
 var STATE_KVS_KEY = "mix_tank_fertilizer_controller_state";
+var ACTIVE_STATE_VC_KEY = "text:200";
+var ACTIVE_STATE_VC_ID = 200;
 
 var STATE_IDLE = 0;
 var STATE_FILLING_WATER = 1;
@@ -28,6 +30,7 @@ var state = STATE_IDLE;
 var dosingTimer = null;
 var dosingEndsAtUnix = null;
 var startupRestored = false;
+var activeStateVc = null;
 
 function stateName(s) {
   if (s === STATE_IDLE) return "IDLE";
@@ -156,7 +159,75 @@ function persistState(reason) {
 function transitionTo(nextState, trigger, reason) {
   logTransition(trigger, nextState, reason);
   state = nextState;
+  publishActiveState(trigger);
   persistState(trigger);
+}
+
+function publishActiveState(source) {
+  if (!activeStateVc) {
+    return;
+  }
+
+  try {
+    activeStateVc.setValue(stateName(state));
+    print("[MixTank] Active state published:", stateName(state), "source=", source);
+  } catch (e) {
+    print("[MixTank] Failed to publish active state to", ACTIVE_STATE_VC_KEY, "error=", e);
+  }
+}
+
+function initActiveStateVirtualComponent(onDone) {
+  var status = null;
+
+  try {
+    status = Shelly.getComponentStatus("text", ACTIVE_STATE_VC_ID);
+  } catch (e) {}
+
+  if (status === null) {
+    callRpc("Virtual.Add", {
+      type: "text",
+      id: ACTIVE_STATE_VC_ID,
+      config: {
+        name: "MixTank Active State",
+        persisted: false
+      }
+    }, "virtual_add_active_state", function () {
+      print("[MixTank] Created virtual component", ACTIVE_STATE_VC_KEY);
+      try {
+        activeStateVc = Virtual.getHandle(ACTIVE_STATE_VC_KEY);
+      } catch (e) {
+        activeStateVc = null;
+      }
+
+      if (!activeStateVc) {
+        print("[MixTank] Virtual component handle unavailable after create:", ACTIVE_STATE_VC_KEY);
+      }
+
+      if (onDone) {
+        onDone();
+      }
+    }, function () {
+      print("[MixTank] Could not create virtual component", ACTIVE_STATE_VC_KEY);
+      if (onDone) {
+        onDone();
+      }
+    });
+    return;
+  }
+
+  try {
+    activeStateVc = Virtual.getHandle(ACTIVE_STATE_VC_KEY);
+    if (!activeStateVc) {
+      print("[MixTank] Virtual component handle unavailable:", ACTIVE_STATE_VC_KEY);
+    }
+  } catch (e) {
+    activeStateVc = null;
+    print("[MixTank] Failed to acquire virtual component handle", ACTIVE_STATE_VC_KEY, "error=", e);
+  }
+
+  if (onDone) {
+    onDone();
+  }
 }
 
 function scheduleDosingTimeout(timeoutMs) {
@@ -392,12 +463,15 @@ Shelly.addStatusHandler(function (e) {
   }
 });
 
-restoreStateFromKvs(function () {
-  applyRecoveredState();
-  startupRestored = true;
-  print("[MixTank] Startup recovery complete, event handling enabled");
-  Timer.set(500, false, function () {
-    bootstrapFromCurrentInputs();
+initActiveStateVirtualComponent(function () {
+  restoreStateFromKvs(function () {
+    applyRecoveredState();
+    publishActiveState("startup_recovery_complete");
+    startupRestored = true;
+    print("[MixTank] Startup recovery complete, event handling enabled");
+    Timer.set(500, false, function () {
+      bootstrapFromCurrentInputs();
+    });
   });
 });
 
