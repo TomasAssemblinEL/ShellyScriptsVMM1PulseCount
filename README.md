@@ -63,7 +63,7 @@ https://www.shelly.com/blogs/documentation/shelly-plus-uni?srsltid=AfmBOooTllJw3
 | `NTFY_URL` | `https://ntfy.sh/berg_rud_vaxthus` | Notification endpoint used for operational events. |
 | `STATE_KVS_KEY` | `mix_tank_fertilizer_controller_state` | Persistent state key for reboot-safe recovery. |
 | `ACTIVE_STATE_VC_KEY` | `text:200` | Virtual text component key that exposes current controller state for integrations such as Home Assistant. |
-| `ACTIVE_STATE_VC_ID` | `200` | Virtual text component numeric identifier used when auto-creating the active-state component. |
+| `ACTIVE_STATE_VC_ID` | `200` | Virtual text component numeric identifier for the active-state component key (`text:200`). |
 
 ### MQTT Payload Example
 
@@ -295,7 +295,7 @@ The controller exposes one virtual text component with the active process state 
 Implementation details:
 
 1. The script uses virtual component `text:200` (`ACTIVE_STATE_VC_KEY`).
-2. If the component is missing, the script creates it automatically with `Virtual.Add` and name `MixTank Active State`.
+2. The script tries to attach to `text:200` and publishes state only when that virtual component exists.
 3. On startup recovery completion and on every state transition, the script writes the state string to the virtual component.
 
 Published values:
@@ -310,6 +310,7 @@ Home Assistant usage notes:
 2. Locate the virtual text entity corresponding to component key `text:200`.
 3. Use that entity value in automations, template sensors, or dashboard badges for process-state visibility.
 4. If you changed `ACTIVE_STATE_VC_ID`, update Home Assistant references to the new virtual component key.
+5. On devices/firmware without `Virtual.Add` support, create `text:200` manually (or with a separate setup script) before enabling the controller script.
 
 ### Change Log
 
@@ -320,3 +321,4 @@ Home Assistant usage notes:
 - 2026-05-04: Added reboot-safe KVS persistence and startup recovery documentation for `MixTankFertilizerController.js`.
 - 2026-05-10: Expanded README with detailed technical documentation for `MixTankFertilizerController.js`, including state machine, startup bootstrap, and RPC overload retry behavior.
 - 2026-05-10: Documented Home Assistant virtual-state exposure via virtual component `text:200` and added MixTank VC configuration details.
+- 2026-05-10: Updated virtual-state notes to avoid `Virtual.Add` dependency on firmware that does not expose that RPC method.

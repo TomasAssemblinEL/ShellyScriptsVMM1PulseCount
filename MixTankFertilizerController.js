@@ -177,52 +177,23 @@ function publishActiveState(source) {
 }
 
 function initActiveStateVirtualComponent(onDone) {
-  var status = null;
-
-  try {
-    status = Shelly.getComponentStatus("text", ACTIVE_STATE_VC_ID);
-  } catch (e) {}
-
-  if (status === null) {
-    callRpc("Virtual.Add", {
-      type: "text",
-      id: ACTIVE_STATE_VC_ID,
-      config: {
-        name: "MixTank Active State",
-        persisted: false
-      }
-    }, "virtual_add_active_state", function () {
-      print("[MixTank] Created virtual component", ACTIVE_STATE_VC_KEY);
-      try {
-        activeStateVc = Virtual.getHandle(ACTIVE_STATE_VC_KEY);
-      } catch (e) {
-        activeStateVc = null;
-      }
-
-      if (!activeStateVc) {
-        print("[MixTank] Virtual component handle unavailable after create:", ACTIVE_STATE_VC_KEY);
-      }
-
-      if (onDone) {
-        onDone();
-      }
-    }, function () {
-      print("[MixTank] Could not create virtual component", ACTIVE_STATE_VC_KEY);
-      if (onDone) {
-        onDone();
-      }
-    });
+  if (typeof Virtual === "undefined" || !Virtual || typeof Virtual.getHandle !== "function") {
+    activeStateVc = null;
+    print("[MixTank] Virtual API not available on this firmware, state export disabled");
+    if (onDone) {
+      onDone();
+    }
     return;
   }
 
   try {
     activeStateVc = Virtual.getHandle(ACTIVE_STATE_VC_KEY);
     if (!activeStateVc) {
-      print("[MixTank] Virtual component handle unavailable:", ACTIVE_STATE_VC_KEY);
+      print("[MixTank] Virtual component not found:", ACTIVE_STATE_VC_KEY, "(state export disabled)");
     }
   } catch (e) {
     activeStateVc = null;
-    print("[MixTank] Failed to acquire virtual component handle", ACTIVE_STATE_VC_KEY, "error=", e);
+    print("[MixTank] Failed to attach virtual component", ACTIVE_STATE_VC_KEY, "error=", e);
   }
 
   if (onDone) {
