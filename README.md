@@ -10,7 +10,7 @@ This repository contains three Shelly Script runtime modules:
 
 - `pulse_count.js`: Subscribes to input status updates, derives pulse and flow metrics, and publishes normalized payloads to MQTT.
 - `daily_consumption_led_control.js`: Maintains rolling daily baselines in KVS, computes relative daily deltas, and drives two switch outputs as a visual comparator.
-- `MixTankFertilizerController.js`: Controls mix-tank refill and fertilizer dosing with a state-based automation cycle and reboot-safe KVS recovery.
+- `MixTankFertilizerController.js`: Controls mix-tank refill and fertilizer dosing with a state-based automation cycle, reboot-safe KVS recovery, and device-specific MQTT log mirroring.
 
 Shelly Plus Uni user guide:
 https://www.shelly.com/blogs/documentation/shelly-plus-uni?srsltid=AfmBOooTllJw3eJ0L_DH3xdOvt1dClnTWgpJnGhwQNg1mkwBrpo79mk6
@@ -21,7 +21,7 @@ https://www.shelly.com/blogs/documentation/shelly-plus-uni?srsltid=AfmBOooTllJw3
 |------|-------------|
 | `pulse_count.js` | Pulse counter and flow metrics publisher |
 | `daily_consumption_led_control.js` | Daily comparison script with persistence and LED switch control |
-| `MixTankFertilizerController.js` | Mix-tank refill and fertilizer dosing controller with timed dosing reset and KVS-backed restart recovery |
+| `MixTankFertilizerController.js` | Mix-tank refill and fertilizer dosing controller with timed dosing reset, KVS-backed restart recovery, and MQTT log export |
 
 ### Configuration: `pulse_count.js`
 
@@ -56,14 +56,15 @@ https://www.shelly.com/blogs/documentation/shelly-plus-uni?srsltid=AfmBOooTllJw3
 | `HIGH_LEVEL_INPUT_ID` | `1` | High-level tank sensor input. A `true` event terminates water fill and starts fertilizer dosing. |
 | `WATER_VALVE_SWITCH_ID` | `0` | Output switch that opens/closes the water refill valve. |
 | `FERTILIZER_PUMP_SWITCH_ID` | `1` | Output switch that runs the fertilizer dosing pump. |
-| `FERTILIZER_TIMEOUT_MS` | `15000` | Maximum fertilizer pump runtime for one dosing cycle. |
-| `WATER_FILL_WINDOW_START_HOUR` | `0` | Start hour for permitted automatic refill window. |
-| `WATER_FILL_WINDOW_END_HOUR` | `3` | End hour for permitted automatic refill window. |
-| `WINDOW_ENFORCE_INTERVAL_MS` | `60000` | Polling interval used to force-stop filling if the time window closes mid-cycle. |
+| `FERTILIZER_TIMEOUT_MS` | `20000` | Maximum fertilizer pump runtime for one dosing cycle. |
 | `NTFY_URL` | `https://ntfy.sh/berg_rud_vaxthus` | Notification endpoint used for operational events. |
 | `STATE_KVS_KEY` | `mix_tank_fertilizer_controller_state` | Persistent state key for reboot-safe recovery. |
 | `ACTIVE_STATE_VC_KEY` | `text:200` | Virtual text component key that exposes current controller state for integrations such as Home Assistant. |
 | `ACTIVE_STATE_VC_ID` | `200` | Virtual text component numeric identifier for the active-state component key (`text:200`). |
+| `MQTT_LOG_ENABLED` | `true` | Enables mirroring of all `print(...)` logs to MQTT. |
+| `MQTT_LOG_TOPIC_BASE` | `shelly/mix_tank/log` | Base topic used to construct a device-specific log topic. |
+| `MQTT_LOG_QOS` | `0` | QoS level for MQTT log publishes. |
+| `MQTT_LOG_RETAIN` | `false` | Retain flag for MQTT log publishes. |
 
 ### MQTT Payload Example
 
@@ -135,7 +136,7 @@ Compare yesterday vs day-before: less (yesterday:2.1 day_before:3.4)
 2. On reboot, it restores one of three states: idle, filling water, or dosing fertilizer.
 3. If dosing was active, it resumes only for the remaining dosing time when system unix time is valid.
 4. If recovery time data is missing or invalid, it performs a safe reset (pump off and state idle).
-5. Water filling is allowed only between `00:00` (inclusive) and `03:00` (exclusive), and is automatically stopped outside this window.
+5. Output states are reasserted during recovery to align physical outputs with recovered logical state.
 
 ### MixTank Controller Technical Description
 
@@ -147,6 +148,7 @@ Compare yesterday vs day-before: less (yesterday:2.1 day_before:3.4)
 2. `input:1` is the high-level sensor.
 3. `switch:0` drives the water refill valve.
 4. `switch:1` drives the fertilizer dosing pump.
+5. MQTT publishes structured runtime logs under a device-specific topic derived from `MQTT_LOG_TOPIC_BASE`.
 
 Expected process sequence:
 
@@ -181,12 +183,11 @@ This means the controller is edge-triggered for normal operation, but recovery l
 
 #### Water fill logic
 
-`startWaterFillCycle()` enforces two hard preconditions before opening the valve:
+`startWaterFillCycle()` enforces one hard precondition before opening the valve:
 
 1. Current state must be `STATE_IDLE`.
-2. Current local time must be inside the allowed refill window `00:00 <= time < 03:00`.
 
-If both conditions are met, the script sends `Switch.set` for the water valve and transitions to `STATE_FILLING_WATER` in the RPC success callback. The transition is therefore coupled to confirmed command submission rather than assumed immediately.
+If the condition is met, the script sends `Switch.set` for the water valve and transitions to `STATE_FILLING_WATER` in the RPC success callback. The transition is therefore coupled to confirmed command submission rather than assumed immediately.
 
 #### Fertilizer dosing logic
 
@@ -203,16 +204,13 @@ The function performs these operations:
 
 `stopDosingAndReset()` clears the dosing timer, resets `dosingEndsAtUnix`, turns the pump off, and returns the controller to `STATE_IDLE`.
 
-#### Time handling and fill window enforcement
+#### Time handling and dosing recovery
 
-The controller uses two different system-time signals:
+The controller uses system unix time for dosing recovery bookkeeping:
 
-1. `sys.time` is parsed as `HH:MM` and used for refill-window decisions.
-2. `sys.unixtime` is used for calculating and recovering remaining dosing duration.
+1. `sys.unixtime` is used for calculating and recovering remaining dosing duration.
 
-If local time cannot be parsed, the refill window check fails closed. In other words, automatic water fill will not start unless the script can prove that current time is inside the allowed window.
-
-In addition to the event-driven start gate, a repeating timer runs every `WINDOW_ENFORCE_INTERVAL_MS`. If the controller is still in `STATE_FILLING_WATER` after the allowed window closes, it explicitly shuts the valve, ensures the pump is off, and returns to `STATE_IDLE`.
+If unix time is missing or invalid during a dosing-state reboot recovery, the controller fails safe by forcing pump off and resetting to `STATE_IDLE`.
 
 #### Persistence model
 
@@ -244,11 +242,32 @@ Startup uses a multi-stage recovery flow:
 Recovery behavior by state:
 
 1. `STATE_FILLING_WATER`
-  The controller verifies the current time window. If the refill window is still valid, it reopens the water valve and forces the pump off. If the window is no longer valid, it turns both outputs off and resets to `IDLE`.
+  The controller reopens the water valve and forces the pump off, then persists the recovered filling state.
 2. `STATE_DOSING_FERTILIZER`
   The controller requires both valid unix time and a persisted `dosingEndsAtUnix`. It computes the remaining dosing time. If time is invalid or the dosing end time has already passed, it performs a safe reset to `IDLE`. Otherwise it turns the valve off, resumes the pump, reschedules the remaining timer, and keeps state synchronized in KVS.
 3. `STATE_IDLE`
   The controller forces both outputs off and persists the normalized idle state.
+
+#### MQTT log export behavior
+
+The script wraps the global `print(...)` function so each local log line is also published over MQTT.
+
+Topic resolution flow:
+
+1. Start from `MQTT_LOG_TOPIC_BASE`.
+2. Resolve a device suffix from `Shelly.getDeviceInfo()` using priority: `name`, `id`, then `mac`.
+3. If no suffix is found, fall back to `Shelly.getComponentConfig("sys").device.name`.
+4. Sanitize suffix to lowercase `[a-z0-9_-]` only.
+5. If still empty, use `unknown`.
+6. Final publish topic becomes `<MQTT_LOG_TOPIC_BASE>/<device_suffix>`.
+
+Publishing behavior:
+
+1. Local console logging is preserved through the original print function.
+2. The MQTT mirror is guarded by `MQTT_LOG_ENABLED`.
+3. QoS and retain behavior are fully controlled by `MQTT_LOG_QOS` and `MQTT_LOG_RETAIN`.
+4. Recursive logging loops are prevented with an in-flight guard during MQTT publish attempts.
+5. MQTT publish failures are emitted to local logs using the unwrapped print reference.
 
 #### Startup bootstrap for missed edge events
 
@@ -280,11 +299,10 @@ This keeps startup recovery from crashing the script when several `Switch.set`, 
 
 The controller is conservative by design:
 
-1. If current time is unknown, refill start is denied.
+1. If unix time is unavailable during dosing-state recovery, the controller performs a safe reset instead of resuming blindly.
 2. If persisted dosing timing is invalid on restart, dosing does not resume blindly.
-3. If the refill window closes while filling, the valve is shut and state is reset.
-4. Output states are explicitly reasserted on recovery instead of trusting previous relay state.
-5. Duplicate or out-of-order triggers are ignored when they do not match the expected current state.
+3. Output states are explicitly reasserted on recovery instead of trusting previous relay state.
+4. Duplicate or out-of-order triggers are ignored when they do not match the expected current state.
 
 These decisions bias the system toward stopping automation rather than continuing with uncertain process state.
 
@@ -322,3 +340,5 @@ Home Assistant usage notes:
 - 2026-05-10: Expanded README with detailed technical documentation for `MixTankFertilizerController.js`, including state machine, startup bootstrap, and RPC overload retry behavior.
 - 2026-05-10: Documented Home Assistant virtual-state exposure via virtual component `text:200` and added MixTank VC configuration details.
 - 2026-05-10: Updated virtual-state notes to avoid `Virtual.Add` dependency on firmware that does not expose that RPC method.
+- 2026-05-15: Removed refill time-window documentation to match current controller implementation.
+- 2026-05-15: Added technical documentation for device-specific MQTT log topic resolution and print-to-MQTT log mirroring.
