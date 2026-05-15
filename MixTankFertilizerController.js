@@ -13,14 +13,15 @@ var LOW_LEVEL_INPUT_ID = 0;
 var HIGH_LEVEL_INPUT_ID = 1;
 var WATER_VALVE_SWITCH_ID = 0;
 var FERTILIZER_PUMP_SWITCH_ID = 1;
-var FERTILIZER_TIMEOUT_MS = 15000;
-var WATER_FILL_WINDOW_START_HOUR = 0;
-var WATER_FILL_WINDOW_END_HOUR = 3;
-var WINDOW_ENFORCE_INTERVAL_MS = 60000;
+var FERTILIZER_TIMEOUT_MS = 20000;
 var NTFY_URL = "https://ntfy.sh/berg_rud_vaxthus";
 var STATE_KVS_KEY = "mix_tank_fertilizer_controller_state";
 var ACTIVE_STATE_VC_KEY = "text:200";
 var ACTIVE_STATE_VC_ID = 200;
+var MQTT_LOG_ENABLED = true;
+var MQTT_LOG_TOPIC_BASE = "shelly/mix_tank/log";
+var MQTT_LOG_QOS = 0;
+var MQTT_LOG_RETAIN = false;
 
 var STATE_IDLE = 0;
 var STATE_FILLING_WATER = 1;
@@ -31,6 +32,126 @@ var dosingTimer = null;
 var dosingEndsAtUnix = null;
 var startupRestored = false;
 var activeStateVc = null;
+var nativePrint = print;
+var mqttLogInProgress = false;
+var mqttLogTopicResolved = MQTT_LOG_TOPIC_BASE + "/unknown";
+
+function sanitizeTopicSegment(value) {
+  if (typeof value !== "string" || value.length === 0) {
+    return "";
+  }
+
+  var cleaned = value.toLowerCase();
+  cleaned = cleaned.replace(/[^a-z0-9_-]+/g, "_");
+  cleaned = cleaned.replace(/^_+|_+$/g, "");
+  return cleaned;
+}
+
+function resolveDeviceSpecificMqttTopic() {
+  var suffix = "";
+
+  try {
+    if (typeof Shelly.getDeviceInfo === "function") {
+      var info = Shelly.getDeviceInfo();
+      if (info) {
+        suffix = sanitizeTopicSegment(info.name || "");
+        if (!suffix) {
+          suffix = sanitizeTopicSegment(info.id || "");
+        }
+        if (!suffix) {
+          suffix = sanitizeTopicSegment(info.mac || "");
+        }
+      }
+    }
+  } catch (e) {}
+
+  if (!suffix) {
+    try {
+      var sys = Shelly.getComponentConfig("sys");
+      if (sys && sys.device) {
+        suffix = sanitizeTopicSegment(sys.device.name || "");
+      }
+    } catch (e2) {}
+  }
+
+  if (!suffix) {
+    suffix = "unknown";
+  }
+
+  mqttLogTopicResolved = MQTT_LOG_TOPIC_BASE + "/" + suffix;
+  nativePrint("[MixTank] MQTT log topic:", mqttLogTopicResolved);
+}
+
+function formatLogMessage(args) {
+  var parts = [];
+  var i;
+  for (i = 0; i < args.length; i++) {
+    var value = args[i];
+    if (typeof value === "string") {
+      parts.push(value);
+      continue;
+    }
+
+    if (value === null) {
+      parts.push("null");
+      continue;
+    }
+
+    if (typeof value === "undefined") {
+      parts.push("undefined");
+      continue;
+    }
+
+    if (typeof value === "object") {
+      try {
+        parts.push(JSON.stringify(value));
+      } catch (e) {
+        parts.push(String(value));
+      }
+      continue;
+    }
+
+    parts.push(String(value));
+  }
+
+  return parts.join(" ");
+}
+
+function publishLogToMqtt(message) {
+  if (!MQTT_LOG_ENABLED || !message) {
+    return;
+  }
+
+  try {
+    Shelly.call("MQTT.Publish", {
+      topic: mqttLogTopicResolved,
+      message: message,
+      qos: MQTT_LOG_QOS,
+      retain: MQTT_LOG_RETAIN
+    }, function (result, errorCode, errorMessage) {
+      if (errorCode !== 0) {
+        nativePrint("[MixTank][MQTT LOG ERROR]", "code=", errorCode, "message=", errorMessage);
+      }
+    });
+  } catch (e) {
+    nativePrint("[MixTank][MQTT LOG EXCEPTION]", e);
+  }
+}
+
+print = function () {
+  var args = Array.prototype.slice.call(arguments);
+  nativePrint.apply(null, args);
+
+  if (mqttLogInProgress) {
+    return;
+  }
+
+  mqttLogInProgress = true;
+  publishLogToMqtt(formatLogMessage(args));
+  mqttLogInProgress = false;
+};
+
+resolveDeviceSpecificMqttTopic();
 
 function stateName(s) {
   if (s === STATE_IDLE) return "IDLE";
@@ -105,45 +226,6 @@ function getUnixTime() {
   } catch (e) {}
 
   return 0;
-}
-
-function getLocalMinutesOfDay() {
-  try {
-    var sys = Shelly.getComponentStatus("sys");
-    if (!sys || typeof sys.time !== "string") {
-      return -1;
-    }
-
-    var parts = sys.time.split(":");
-    if (parts.length !== 2) {
-      return -1;
-    }
-
-    var hour = parseInt(parts[0], 10);
-    var minute = parseInt(parts[1], 10);
-    if (isNaN(hour) || isNaN(minute)) {
-      return -1;
-    }
-
-    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
-      return -1;
-    }
-
-    return hour * 60 + minute;
-  } catch (e) {}
-
-  return -1;
-}
-
-function isWithinWaterFillWindow() {
-  var nowMinutes = getLocalMinutesOfDay();
-  if (nowMinutes < 0) {
-    return false;
-  }
-
-  var startMinutes = WATER_FILL_WINDOW_START_HOUR * 60;
-  var endMinutes = WATER_FILL_WINDOW_END_HOUR * 60;
-  return nowMinutes >= startMinutes && nowMinutes < endMinutes;
 }
 
 function persistState(reason) {
@@ -250,11 +332,6 @@ function startWaterFillCycle() {
     return;
   }
 
-  if (!isWithinWaterFillWindow()) {
-    print("[MixTank] Ignoring low-level trigger outside allowed fill window 00:00-03:00");
-    return;
-  }
-
   setSwitch(WATER_VALVE_SWITCH_ID, true, "start_water_fill", function () {
     transitionTo(STATE_FILLING_WATER, "input:0=true", "Low level detected, filling water");
   });
@@ -303,14 +380,6 @@ function restoreStateFromKvs(onDone) {
 
 function applyRecoveredState() {
   if (state === STATE_FILLING_WATER) {
-    if (!isWithinWaterFillWindow()) {
-      print("[MixTank] Recovered filling state outside allowed window, forcing idle");
-      setSwitch(WATER_VALVE_SWITCH_ID, false, "restore_filling_outside_window_water_off");
-      setSwitch(FERTILIZER_PUMP_SWITCH_ID, false, "restore_filling_outside_window_pump_off");
-      transitionTo(STATE_IDLE, "startup_outside_fill_window", "Recovered filling state not allowed by time window");
-      return;
-    }
-
     setSwitch(WATER_VALVE_SWITCH_ID, true, "restore_filling_water", function () {
       print("[MixTank] Restored water filling state");
     });
@@ -350,25 +419,6 @@ function applyRecoveredState() {
   setSwitch(WATER_VALVE_SWITCH_ID, false, "restore_idle_water_off");
   setSwitch(FERTILIZER_PUMP_SWITCH_ID, false, "restore_idle_pump_off");
   persistState("startup_restore_idle");
-}
-
-function enforceWaterFillWindow() {
-  if (!startupRestored) {
-    return;
-  }
-
-  if (state !== STATE_FILLING_WATER) {
-    return;
-  }
-
-  if (isWithinWaterFillWindow()) {
-    return;
-  }
-
-  print("[MixTank] Fill window closed while filling, stopping water and resetting to IDLE");
-  setSwitch(WATER_VALVE_SWITCH_ID, false, "window_close_stop_water");
-  setSwitch(FERTILIZER_PUMP_SWITCH_ID, false, "window_close_ensure_pump_off");
-  transitionTo(STATE_IDLE, "fill_window_closed", "Outside allowed fill window 00:00-03:00");
 }
 
 function getInputState(inputId) {
@@ -444,8 +494,4 @@ initActiveStateVirtualComponent(function () {
       bootstrapFromCurrentInputs();
     });
   });
-});
-
-Timer.set(WINDOW_ENFORCE_INTERVAL_MS, true, function () {
-  enforceWaterFillWindow();
 });
